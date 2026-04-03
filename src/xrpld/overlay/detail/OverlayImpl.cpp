@@ -8,7 +8,7 @@
 #include <xrpld/overlay/predicates.h>
 #include <xrpld/peerfinder/make_Manager.h>
 #include <xrpld/core/ConfigSections.h>
-#include <xrpld/rpc/handlers/GetCounts.h>
+#include <xrpld/rpc/handlers/admin/status/GetCounts.h>
 #include <xrpld/rpc/json_body.h>
 
 #include <xrpl/basics/base64.h>
@@ -136,7 +136,6 @@ OverlayImpl::OverlayImpl(
               useSqlitePeerFinderStore(app.config())))
     , m_resolver(resolver)
     , next_id_(1)
-    , timer_count_(0)
     , slots_(app, *this, app.config())
     , m_stats(
           std::bind(&OverlayImpl::collect_metrics, this),
