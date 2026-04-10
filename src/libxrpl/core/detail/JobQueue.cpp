@@ -8,12 +8,14 @@ namespace xrpl {
 
 JobQueue::JobQueue(
     int threadCount,
+    int updatePathsJobLimit,
     beast::insight::Collector::ptr const& collector,
     beast::Journal journal,
     Logs& logs,
     perf::PerfLog& perfLog)
     : m_journal(journal)
     , m_invalidJobData(JobTypes::instance().getInvalid(), collector, logs)
+    , updatePathsJobLimit_(updatePathsJobLimit > 0 ? updatePathsJobLimit : 1)
     , m_workers(*this, &perfLog, "JobQueue", threadCount)
     , perfLog_(perfLog)
     , m_collector(collector)
@@ -379,6 +381,9 @@ JobQueue::processTask(int instance)
 int
 JobQueue::getJobLimit(JobType type)
 {
+    if (type == jtUPDATE_PF)
+        return updatePathsJobLimit_;
+
     JobTypeInfo const& j(JobTypes::instance().get(type));
     XRPL_ASSERT(j.type() != jtINVALID, "xrpl::JobQueue::getJobLimit : valid job type");
 
