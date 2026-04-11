@@ -304,7 +304,7 @@ SHAMapStoreImp::run()
                     return;
                 JLOG(journal_.debug()) << "RWDB: archive copied to new backend";
 
-                ledgerMaster_->clearLedgerCachePrior(validatedSeq);
+                clearCaches(validatedSeq);
                 lastRotated = validatedSeq;
 
                 dbRotating_->rotate(
@@ -315,7 +315,7 @@ SHAMapStoreImp::run()
                         savedState.archiveDb = archiveName;
                         savedState.lastRotated = lastRotated;
                         state_db_.setState(savedState);
-                        ledgerMaster_->clearLedgerCachePrior(validatedSeq);
+                        clearCaches(validatedSeq);
                     });
 
                 JLOG(journal_.warn()) << "finished rotation " << validatedSeq;
