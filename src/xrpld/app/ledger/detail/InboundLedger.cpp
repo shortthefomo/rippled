@@ -4,6 +4,7 @@
 #include <xrpld/app/ledger/LedgerMaster.h>
 #include <xrpld/app/ledger/TransactionStateSF.h>
 #include <xrpld/app/main/Application.h>
+#include <xrpld/core/Config.h>
 #include <xrpld/core/ConfigSections.h>
 #include <xrpld/overlay/Overlay.h>
 
@@ -17,11 +18,152 @@
 #include <boost/algorithm/string/predicate.hpp>
 
 #include <algorithm>
+#include <limits>
 #include <random>
 
 namespace xrpl {
 
 using namespace std::chrono_literals;
+
+namespace {
+
+template <class Map>
+std::size_t
+wireCompleteSHAMap(Map const& map)
+{
+    std::size_t leaves = 0;
+    for (auto const& item : map)
+    {
+        (void)item;
+        ++leaves;
+    }
+    return leaves;
+}
+
+std::optional<std::uint32_t>
+sameChainDistance(
+    std::shared_ptr<Ledger const> const& targetLedger,
+    std::shared_ptr<Ledger const> const& candidate,
+    beast::Journal journal)
+{
+    if (!targetLedger || !candidate || !candidate->isFullyWired())
+        return std::nullopt;
+
+    if (candidate->header().hash == targetLedger->header().hash)
+        return std::nullopt;
+
+    bool sameChain = false;
+    try
+    {
+        if (candidate->header().seq < targetLedger->header().seq)
+        {
+            if (auto const hash =
+                    hashOfSeq(*targetLedger, candidate->header().seq, journal);
+                hash && *hash == candidate->header().hash)
+            {
+                sameChain = true;
+            }
+        }
+        else if (candidate->header().seq > targetLedger->header().seq)
+        {
+            if (auto const hash =
+                    hashOfSeq(*candidate, targetLedger->header().seq, journal);
+                hash && *hash == targetLedger->header().hash)
+            {
+                sameChain = true;
+            }
+        }
+    }
+    catch (std::exception const&)
+    {
+        sameChain = false;
+    }
+
+    if (!sameChain)
+        return std::nullopt;
+
+    return candidate->header().seq < targetLedger->header().seq
+        ? targetLedger->header().seq - candidate->header().seq
+        : candidate->header().seq - targetLedger->header().seq;
+}
+
+std::shared_ptr<Ledger const>
+chooseCloserBase(
+    std::shared_ptr<Ledger const> const& targetLedger,
+    std::shared_ptr<Ledger const> const& first,
+    std::shared_ptr<Ledger const> const& second,
+    beast::Journal journal)
+{
+    auto const firstDistance = sameChainDistance(targetLedger, first, journal);
+    auto const secondDistance =
+        sameChainDistance(targetLedger, second, journal);
+
+    if (firstDistance && secondDistance)
+        return *firstDistance <= *secondDistance ? first : second;
+    if (firstDistance)
+        return first;
+    if (secondDistance)
+        return second;
+    return {};
+}
+
+std::shared_ptr<Ledger const>
+findBestFullyWiredBase(
+    Application& app,
+    std::shared_ptr<Ledger const> const& targetLedger,
+    beast::Journal journal)
+{
+    auto const ledgerMasterBase =
+        app.getLedgerMaster().getClosestFullyWiredLedger(targetLedger);
+    auto const inboundBase =
+        app.getInboundLedgers().getClosestFullyWiredLedger(targetLedger);
+    return chooseCloserBase(
+        targetLedger, inboundBase, ledgerMasterBase, journal);
+}
+
+bool
+primeInboundLedgerForUse(
+    std::shared_ptr<Ledger> const& ledger,
+    std::shared_ptr<Ledger const> const& baseLedger,
+    beast::Journal journal,
+    char const* context)
+{
+    if (!Config::null_backend())
+        return true;
+
+    if (ledger->isFullyWired())
+        return true;
+
+    if (!baseLedger || !baseLedger->isFullyWired())
+    {
+        return ledger->fullWireForUse(journal, context);
+    }
+
+    try
+    {
+        std::size_t stateNodes = 0;
+        ledger->stateMap().visitDifferences(
+            &baseLedger->stateMap(), [&stateNodes](SHAMapTreeNode const&) {
+                ++stateNodes;
+                return true;
+            });
+        auto const txLeaves = wireCompleteSHAMap(ledger->txMap());
+        ledger->setFullyWired();
+        JLOG(journal.info())
+            << context << ": fully wired ledger " << ledger->header().seq << " ("
+            << stateNodes << " changed state nodes vs base ledger "
+            << baseLedger->header().seq << ", " << txLeaves << " tx leaves)";
+        return true;
+    }
+    catch (SHAMapMissingNode const& e)
+    {
+        JLOG(journal.warn()) << context << ": incomplete ledger "
+                             << ledger->header().seq << ": " << e.what();
+        return false;
+    }
+}
+
+}  // namespace
 
 enum {
     // Number of peers to start with
@@ -103,13 +245,25 @@ InboundLedger::init(ScopedLockType& collectionLock)
 
     JLOG(journal_.debug()) << "Acquiring ledger we already have in "
                            << " local store. " << hash_;
+    auto const baseLedger = findBestFullyWiredBase(app_, mLedger, journal_);
+    if (!primeInboundLedgerForUse(
+            mLedger, baseLedger, journal_, "InboundLedger::init"))
+    {
+        complete_ = false;
+        failed_ = true;
+        done();
+        return;
+    }
     XRPL_ASSERT(
         mLedger->header().seq < XRP_LEDGER_EARLIEST_FEES || mLedger->read(keylet::fees()),
         "xrpl::InboundLedger::init : valid ledger fees");
     mLedger->setImmutable();
 
     if (mReason == Reason::HISTORY)
+    {
+        app_.getInboundLedgers().onLedgerFetched(shared_from_this());
         return;
+    }
 
     app_.getLedgerMaster().storeLedger(mLedger);
 
@@ -421,18 +575,31 @@ InboundLedger::done()
 
     if (complete_ && !failed_ && mLedger)
     {
-        XRPL_ASSERT(
-            mLedger->header().seq < XRP_LEDGER_EARLIEST_FEES || mLedger->read(keylet::fees()),
-            "xrpl::InboundLedger::done : valid ledger fees");
-        mLedger->setImmutable();
-        switch (mReason)
+        auto const baseLedger =
+            findBestFullyWiredBase(app_, mLedger, journal_);
+        if (!primeInboundLedgerForUse(
+                mLedger, baseLedger, journal_, "InboundLedger::done"))
         {
-            case Reason::HISTORY:
-                app_.getInboundLedgers().onLedgerFetched();
-                break;
-            default:
-                app_.getLedgerMaster().storeLedger(mLedger);
-                break;
+            complete_ = false;
+            failed_ = true;
+        }
+
+        if (complete_ && !failed_)
+        {
+            XRPL_ASSERT(
+                mLedger->header().seq < XRP_LEDGER_EARLIEST_FEES || mLedger->read(keylet::fees()),
+                "xrpl::InboundLedger::done : valid ledger fees");
+            mLedger->setImmutable();
+            switch (mReason)
+            {
+                case Reason::HISTORY:
+                    app_.getInboundLedgers().onLedgerFetched(
+                        shared_from_this());
+                    break;
+                default:
+                    app_.getLedgerMaster().storeLedger(mLedger);
+                    break;
+            }
         }
     }
 

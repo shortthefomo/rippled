@@ -29,9 +29,6 @@ public:
     }
 
     void
-    copyArchiveTo(Backend& dest) override;
-
-    void
     rotate(
         std::unique_ptr<NodeStore::Backend>&& newBackend,
         std::function<void(std::string const& writableName, std::string const& archiveName)> const&
