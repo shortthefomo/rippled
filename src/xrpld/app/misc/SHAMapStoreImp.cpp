@@ -93,6 +93,18 @@ SHAMapStoreImp::SHAMapStoreImp(
 
     get_if_exists(section, "online_delete", deleteInterval_);
     isMemoryBackend_ = boost::iequals(get(section, "type"), "rwdb");
+
+    // Allow null_backend to be set via config as well as env var.
+    // If the config key is present, propagate it to the environment so
+    // that libxrpl helpers (which cannot access Config) pick it up.
+    // This runs single-threaded during startup, before worker threads.
+    if (isMemoryBackend_ && section.exists("null_backend"))
+    {
+        auto const val = get(section, "null_backend");
+        if (val == "1" || boost::iequals(val, "true"))
+            ::setenv("XRPL_RWDB_NULL", "1", 1);
+    }
+
     isNullBackend_ = isMemoryBackend_ && Config::null_backend();
 
     if (isNullBackend_)
