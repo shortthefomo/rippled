@@ -4,25 +4,7 @@
 #include <xrpl/shamap/SHAMapLeafNode.h>
 #include <xrpl/shamap/SHAMapSyncFilter.h>
 
-#include <cstdlib>
-#include <string_view>
-
 namespace xrpl {
-
-namespace {
-
-// Mirror of Config::null_backend() — shamap cannot depend on xrpld.core.
-bool
-useFullBelowCache()
-{
-    static bool const use = [] {
-        char const* e = std::getenv("XRPL_RWDB_NULL");
-        return !(e && *e && std::string_view{e} != "0");
-    }();
-    return use;
-}
-
-}  // namespace
 
 void
 SHAMap::visitLeaves(
@@ -190,7 +172,7 @@ SHAMap::gmn_ProcessNodes(MissingNodes& mn, MissingNodes::StackEntry& se)
             fullBelow = false;
         }
         else if (
-            !backed_ || !useFullBelowCache() ||
+            !backed_ ||
             !f_.getFullBelowCache()->touch_if_exists(childHash.as_uint256()))
         {
             bool pending = false;
@@ -226,9 +208,8 @@ SHAMap::gmn_ProcessNodes(MissingNodes& mn, MissingNodes::StackEntry& se)
             }
             else if (
                 d->isInner() &&
-                (!useFullBelowCache() ||
-                 !safe_downcast<SHAMapInnerNode*>(d)->isFullBelow(
-                     mn.generation_)))
+                !safe_downcast<SHAMapInnerNode*>(d)->isFullBelow(
+                    mn.generation_))
             {
                 mn.stack_.push(se);
 
@@ -248,7 +229,7 @@ SHAMap::gmn_ProcessNodes(MissingNodes& mn, MissingNodes::StackEntry& se)
     if (fullBelow)
     {  // No partial node encountered below this node
         node->setFullBelowGen(mn.generation_);
-        if (backed_ && useFullBelowCache())
+        if (backed_)
         {
             f_.getFullBelowCache()->insert(node->getHash().as_uint256());
         }
@@ -319,9 +300,8 @@ SHAMap::getMissingNodes(int max, SHAMapSyncFilter* filter)
         f_.getFullBelowCache()->getGeneration());
 
     if (!root_->isInner() ||
-        (useFullBelowCache() &&
-         intr_ptr::static_pointer_cast<SHAMapInnerNode>(root_)->isFullBelow(
-             mn.generation_)))
+        intr_ptr::static_pointer_cast<SHAMapInnerNode>(root_)->isFullBelow(
+            mn.generation_))
     {
         clearSynching();
         return std::move(mn.missingNodes_);
@@ -386,8 +366,7 @@ SHAMap::getMissingNodes(int max, SHAMapSyncFilter* filter)
                 // Recheck nodes we could not finish before
                 for (auto const& [innerNode, nodeId] : mn.resumes_)
                 {
-                    if (!useFullBelowCache() ||
-                        !innerNode->isFullBelow(mn.generation_))
+                    if (!innerNode->isFullBelow(mn.generation_))
                         mn.stack_.push(std::make_tuple(innerNode, nodeId, rand_int(255), 0, true));
                 }
 
@@ -562,8 +541,7 @@ SHAMap::addKnownNode(SHAMapNodeID const& node, Slice const& rawNode, SHAMapSyncF
     auto currNode = root_.get();
 
     while (currNode->isInner() &&
-           (!useFullBelowCache() ||
-            !safe_downcast<SHAMapInnerNode*>(currNode)->isFullBelow(generation)) &&
+           !safe_downcast<SHAMapInnerNode*>(currNode)->isFullBelow(generation) &&
            (currNodeID.getDepth() < node.getDepth()))
     {
         int const branch = selectBranch(currNodeID, node.getNodeID());
@@ -576,8 +554,7 @@ SHAMap::addKnownNode(SHAMapNodeID const& node, Slice const& rawNode, SHAMapSyncF
         }
 
         auto childHash = inner->getChildHash(branch);
-        if (useFullBelowCache() &&
-            f_.getFullBelowCache()->touch_if_exists(childHash.as_uint256()))
+        if (f_.getFullBelowCache()->touch_if_exists(childHash.as_uint256()))
         {
             return SHAMapAddNode::duplicate();
         }

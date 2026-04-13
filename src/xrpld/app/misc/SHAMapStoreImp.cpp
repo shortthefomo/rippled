@@ -324,7 +324,7 @@ SHAMapStoreImp::run()
                        "lastRotated to "
                     << validatedSeq;
 
-                ledgerMaster_->clearLedgerCachePrior(validatedSeq);
+                clearCaches(validatedSeq);
                 lastRotated = validatedSeq;
 
                 auto newBackend = makeBackendRotating();
@@ -337,7 +337,7 @@ SHAMapStoreImp::run()
                         savedState.archiveDb = archiveName;
                         savedState.lastRotated = lastRotated;
                         state_db_.setState(savedState);
-                        ledgerMaster_->clearLedgerCachePrior(validatedSeq);
+                        clearCaches(validatedSeq);
                     });
 
                 JLOG(journal_.warn()) << "finished rotation " << validatedSeq;
