@@ -136,7 +136,28 @@ primeInboundLedgerForUse(
 
     if (!baseLedger || !baseLedger->isFullyWired())
     {
-        return ledger->fullWireForUse(journal, context);
+        // No base ledger available for a delta walk. The full state tree
+        // walk (wireCompleteSHAMap on 70M+ leaves) is too expensive — on
+        // x86 it takes longer than a consensus round, preventing the node
+        // from ever catching up. Sync already pinned every child in the
+        // tree via canonicalizeChild (in descendAsync/addKnownNode), so
+        // the state map is fully wired. Just wire the (tiny) tx map.
+        try
+        {
+            auto const txLeaves = wireCompleteSHAMap(ledger->txMap());
+            ledger->setFullyWired();
+            JLOG(journal.info())
+                << context << ": wired ledger " << ledger->header().seq
+                << " (sync-pinned state, " << txLeaves << " tx leaves)";
+            return true;
+        }
+        catch (SHAMapMissingNode const& e)
+        {
+            JLOG(journal.warn())
+                << context << ": incomplete ledger " << ledger->header().seq
+                << ": " << e.what();
+            return false;
+        }
     }
 
     try
