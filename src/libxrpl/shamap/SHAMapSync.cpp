@@ -4,7 +4,31 @@
 #include <xrpl/shamap/SHAMapLeafNode.h>
 #include <xrpl/shamap/SHAMapSyncFilter.h>
 
+#include <cstdlib>
+#include <string_view>
+
 namespace xrpl {
+
+namespace {
+
+// In null-backend mode, disable the SHARED FullBelowCache.  The shared
+// cache is populated by one InboundLedger's SHAMap and read by another;
+// when the second SHAMap sees a cache hit it skips the subtree entirely,
+// never descending into it, so children are never pinned via
+// canonicalizeChild.  Per-inner-node isFullBelowGen (LOCAL state) is
+// still allowed — it only affects the same SHAMap that set it, whose
+// children were pinned during the pass that resolved them.
+bool
+useFullBelowCache()
+{
+    static bool const use = [] {
+        char const* e = std::getenv("XRPL_RWDB_NULL");
+        return !(e && *e && std::string_view{e} != "0");
+    }();
+    return use;
+}
+
+}  // namespace
 
 void
 SHAMap::visitLeaves(
@@ -172,7 +196,7 @@ SHAMap::gmn_ProcessNodes(MissingNodes& mn, MissingNodes::StackEntry& se)
             fullBelow = false;
         }
         else if (
-            !backed_ ||
+            !backed_ || !useFullBelowCache() ||
             !f_.getFullBelowCache()->touch_if_exists(childHash.as_uint256()))
         {
             bool pending = false;
@@ -229,7 +253,7 @@ SHAMap::gmn_ProcessNodes(MissingNodes& mn, MissingNodes::StackEntry& se)
     if (fullBelow)
     {  // No partial node encountered below this node
         node->setFullBelowGen(mn.generation_);
-        if (backed_)
+        if (backed_ && useFullBelowCache())
         {
             f_.getFullBelowCache()->insert(node->getHash().as_uint256());
         }
@@ -554,7 +578,8 @@ SHAMap::addKnownNode(SHAMapNodeID const& node, Slice const& rawNode, SHAMapSyncF
         }
 
         auto childHash = inner->getChildHash(branch);
-        if (f_.getFullBelowCache()->touch_if_exists(childHash.as_uint256()))
+        if (useFullBelowCache() &&
+            f_.getFullBelowCache()->touch_if_exists(childHash.as_uint256()))
         {
             return SHAMapAddNode::duplicate();
         }

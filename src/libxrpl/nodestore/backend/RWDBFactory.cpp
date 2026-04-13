@@ -101,6 +101,7 @@ public:
     {
         if (nullMode())
             return notFound;
+
         std::shared_lock lock(mutex_);
         if (!isOpen_)
             return notFound;

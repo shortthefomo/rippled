@@ -142,6 +142,10 @@ primeInboundLedgerForUse(
     try
     {
         std::size_t stateNodes = 0;
+        // By the time an inbound ledger is marked complete, sync has already
+        // descended the current tree; this delta walk avoids rewalking
+        // unchanged state subtrees that are known-good via a fully wired
+        // same-chain base ledger.
         ledger->stateMap().visitDifferences(
             &baseLedger->stateMap(), [&stateNodes](SHAMapTreeNode const&) {
                 ++stateNodes;
