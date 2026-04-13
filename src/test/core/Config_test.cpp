@@ -1559,6 +1559,8 @@ r.ripple.com:51235
             }
         }
 
+        // RWDB without online_delete is now allowed; SHAMapStoreImp
+        // defaults it to ledger_history.
         {
             Config c;
             c.setupControl(true, true, false);
@@ -1568,15 +1570,11 @@ r.ripple.com:51235
             try
             {
                 c.loadFromString(toLoad);
-                fail("Expected exception for RWDB without online_delete");
-            }
-            catch (std::runtime_error const& e)
-            {
-                BEAST_EXPECT(
-                    std::string(e.what()).find(
-                        "RWDB (in-memory backend) requires online_delete") !=
-                    std::string::npos);
                 pass();
+            }
+            catch (std::runtime_error const&)
+            {
+                fail("Should not throw for RWDB without online_delete");
             }
         }
 
